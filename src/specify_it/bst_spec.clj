@@ -12,12 +12,13 @@
             [clojure.pprint :as pprint]
             [specify-it.bst-common :as common]))
 
-(def insert' bug5/insert')
-(def nil' bug5/nil')
-(def valid' bug5/valid')
-(def find' bug5/find')
-(def delete' bug5/delete')
-(def union' bug5/union')
+(def insert' bst/insert')
+(def nil' bst/nil')
+(def valid' bst/valid')
+(def find' bst/find')
+(def delete' bst/delete')
+(def union' bst/union')
+(def keys' bst/keys')
 
 (def to-sorted-list' common/to-sorted-list')
 (def insertions common/insertions)
@@ -141,13 +142,13 @@
     (find' k t)
     (get (into (sorted-map) (insertions t)) k :not-found)))
 
-(def key-gen (gen/scale #(/ % 2) gen/large-integer))
+(def key-gen (gen/scale #(/ % 2) gen/nat))
 
 (def tree-gen
   (gen/fmap
     (fn [kvs]
       (reduce (fn [t [k v]] (insert' k v t)) (nil') kvs))
-    (gen/vector (gen/tuple key-gen gen/large-integer))))
+    (gen/vector (gen/tuple key-gen gen/nat))))
 
 (def equiv-tree-gen (gen/such-that #(equiv (first %) (second %))
                                    (gen/fmap
@@ -155,8 +156,12 @@
                                        [
                                         (reduce (fn [t [k v]] (insert' k v t)) (nil') kvs)
                                         (reduce (fn [t [k v]] (insert' k v t)) (nil') (shuffle kvs))])
-                                     (gen/vector (gen/tuple key-gen gen/large-integer)))))
+                                     (gen/vector (gen/tuple gen/large-integer gen/nat)))))
 
+
+(def labels (atom {}))
+(defn label! [ks lbl]
+  (swap! labels update-in (conj ks lbl) #(inc (or % 0))))
 
 (def props-with-bound-generators
   {
@@ -259,14 +264,39 @@
                                                   (prop-union-model t t'))
    :prop-find-model                 (prop/for-all [k key-gen
                                                    t tree-gen]
-                                                  (prop-find-model k t))})
+                                                  (prop-find-model k t))
+   :prop-measure                    (prop/for-all [k key-gen
+                                                   t tree-gen]
+
+                                                  (if ((set (keys' t)) k)
+                                                    (label! [:prop-measure :presence] "present")
+                                                    (label! [:prop-measure :presence] "absent"))
+                                                  (cond
+                                                    (= nil k) (label! [:prop-measure :location] "empty")
+                                                    (= (keys' t) [k]) (label! [:prop-measure :location] "just k")
+                                                    (every? #(>= % k) (keys' t)) (label! [:prop-measure :location] "at start")
+                                                    (every? #(<= % k) (keys' t)) (label! [:prop-measure :location] "at end")
+                                                    :else (label! [:prop-measure :location] "middle"))
+                                                  true)})
+
+(defn report! []
+  (doseq [[property measurements] @labels]
+    (println (str property ":"))
+    (doseq [[measurement labels] measurements]
+      (println (str "\t" measurement ":"))
+      (let [total (apply + (vals labels))]
+        (doseq [[label num] labels]
+          (println (str "\t\t" label ":" (* 100 (/ (double num) total)) "%")))))))
+
 
 (defn check-props []
+  (reset! labels {})
   (doseq [[prop-name prop] props-with-bound-generators]
     (let [result (tc/quick-check 100 prop)]
       (if (:pass? result)
         (println {:prop-name prop-name :pass? true})
-        (pprint/pprint [prop-name result])))))
+        (pprint/pprint [prop-name result]))))
+  (report!))
 
 (check-props)
 
